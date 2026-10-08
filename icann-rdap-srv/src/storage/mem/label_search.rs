@@ -8,6 +8,7 @@ use crate::error::RdapServerError;
 /// For RDAP, type T is likely RdapResponse or Arc<RdapResponse>.
 pub struct SearchLabels<T: Clone> {
     label_suffixes: HashMap<String, Trie<T>>,
+    exact: HashMap<String, T>,
     separaters: Vec<char>,
 }
 
@@ -18,6 +19,7 @@ impl<T: Clone> SearchLabels<T> {
     pub(crate) fn new_dns_labels() -> Self {
         Self {
             label_suffixes: HashMap::new(),
+            exact: HashMap::new(),
             separaters: vec!['.'],
         }
     }
@@ -27,6 +29,7 @@ impl<T: Clone> SearchLabels<T> {
     pub(crate) fn new_handle_labels() -> Self {
         Self {
             label_suffixes: HashMap::new(),
+            exact: HashMap::new(),
             separaters: vec!['.', '-', '_'],
         }
     }
@@ -36,6 +39,7 @@ impl<T: Clone> SearchLabels<T> {
     pub(crate) fn new_name_labels() -> Self {
         Self {
             label_suffixes: HashMap::new(),
+            exact: HashMap::new(),
             separaters: vec![' ', '-'],
         }
     }
@@ -63,12 +67,29 @@ impl<T: Clone> SearchLabels<T> {
             .entry(String::default())
             .or_insert(Trie::new())
             .insert(text, Some(value.clone()));
+
+        // index the full string for exact match searches
+        self.exact.insert(text.to_owned(), value);
     }
 
     /// Search values based on a label search
     pub(crate) fn search(&self, search: &str) -> Result<Vec<T>, RdapServerError> {
+        // an empty search string is invalid
+        if search.is_empty() {
+            return Err(RdapServerError::InvalidArg(
+                "Search string must not be empty".to_string(),
+            ));
+        }
+
+        let asterisk_count = search.chars().filter(|c| *c == '*').count();
+
+        // a search string without an asterisk ('*') is an exact match
+        if asterisk_count == 0 {
+            return Ok(self.exact.get(search).cloned().into_iter().collect());
+        }
+
         // search string is invalid if it doesn't have only one asterisk ('*')
-        if search.chars().filter(|c| *c == '*').count() != 1 {
+        if asterisk_count != 1 {
             return Err(RdapServerError::InvalidArg(
                 "Search string must contain one and only one asterisk ('*')".to_string(),
             ));
@@ -256,16 +277,34 @@ mod tests {
     }
 
     #[test]
-    fn test_search_string_with_no_asterisk() {
+    fn test_search_string_with_no_asterisk_is_exact_match() {
         // GIVEN
-        let labels: SearchLabels<String> = SearchLabels::dns_labels().build();
-        let search = "foo.example.net";
+        let mut labels = SearchLabels::dns_labels().build();
+        labels.insert("foo.example.com", "foo.example.com".to_owned());
+        labels.insert("bar.example.com", "bar.example.com".to_owned());
 
-        // WHEN
-        let actual = labels.search(search);
+        // WHEN searching for a full name without a wildcard
+        let actual = labels
+            .search("foo.example.com")
+            .expect("exact search should not fail");
+
+        // THEN only the exact match is returned
+        assert_eq!(actual, vec!["foo.example.com".to_string()]);
+    }
+
+    #[test]
+    fn test_search_string_with_no_asterisk_no_match() {
+        // GIVEN
+        let mut labels = SearchLabels::dns_labels().build();
+        labels.insert("foo.example.com", "foo.example.com".to_owned());
+
+        // WHEN searching for a name that was never inserted
+        let actual = labels
+            .search("baz.example.com")
+            .expect("exact search should not fail");
 
         // THEN
-        assert!(actual.is_err());
+        assert!(actual.is_empty());
     }
 
     #[test]
