@@ -137,6 +137,51 @@ async fn search_by_name() {
 }
 
 #[tokio::test]
+async fn search_by_name_exact_match() {
+    // GIVEN
+    let mem_config = MemConfig::builder()
+        .common_config(
+            CommonConfig::builder()
+                .domain_search_by_name_enable(true)
+                .build(),
+        )
+        .build();
+    let mem = Mem::new(mem_config);
+    let mut tx = mem.new_tx().await.expect("new transaction");
+    tx.add_domain(
+        &Domain::idn()
+            .unicode_name("foo.example.com")
+            .ldh_name("foo.example.com")
+            .build(),
+    )
+    .await
+    .expect("add domain in tx");
+    tx.commit().await.expect("tx commit");
+
+    // WHEN searching for the full name without a wildcard
+    let actual = mem
+        .search_domains_by_name("foo.example.com")
+        .await
+        .expect("searching domain by exact name");
+
+    // THEN the exact match is returned
+    let RdapResponse::DomainSearchResults(domains) = actual else {
+        panic!()
+    };
+    assert_eq!(domains.clone().results.len(), 1);
+    assert_eq!(
+        domains
+            .results
+            .first()
+            .expect("at least one")
+            .unicode_name
+            .as_ref()
+            .expect("unicodeName is none"),
+        "foo.example.com"
+    )
+}
+
+#[tokio::test]
 async fn search_by_name_disabled() {
     // GIVEN
     let mem_config = MemConfig::builder()
